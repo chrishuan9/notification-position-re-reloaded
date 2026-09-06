@@ -1,0 +1,110 @@
+name: Release
+
+# Push a tag like v1.2.3 to trigger a release:
+#   git tag v1.2.3 && git push origin v1.2.3
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install glib-compile-schemas
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-bin
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install lint dependencies
+        run: npm ci
+
+      # Non-blocking for now: the GNOME ruleset flags a lot of pre-existing
+      # style issues in the vendored messageTray.js code. Results are printed
+      # to the log so they're visible, but a lint failure doesn't stop a
+      # release until the codebase is cleaned up.
+      - name: Lint (eslint-config-gnome)
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Derive version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          SEMVER="${TAG#v}"
+          MAJOR="${SEMVER%%.*}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
+
+      - name: Read extension UUID
+        id: meta
+        run: echo "uuid=$(jq -r .uuid metadata.json)" >> "$GITHUB_OUTPUT"
+
+      # Only files explicitly copied here end up in the zip, so icon.png,
+      # README.md, LICENSE, CHANGELOG.md and .github are excluded by
+      # construction rather than by an ignore/exclude list.
+      - name: Stage extension package
+        run: |
+          rm -rf dist
+          mkdir -p dist/schemas
+          cp extension.js prefs.js utils.js dist/
+          cp schemas/*.gschema.xml dist/schemas/
+          jq --argjson v "${{ steps.version.outputs.major }}" '.version = $v' metadata.json > dist/metadata.json
+
+      # GNOME extensions ship a compiled schema; recompiling here (rather than
+      # trusting the committed schemas/gschemas.compiled) guarantees the
+      # packaged binary always matches the .gschema.xml at release time, per
+      # the README requirement: `glib-compile-schemas schemas`.
+      - name: Compile GSettings schema
+        run: glib-compile-schemas dist/schemas
+
+      # Guards against the review-guideline rule at
+      # https://gjs.guide/extensions/review-guidelines/review-guidelines.html#don-t-include-unnecessary-files
+      # (no build/install scripts, .po/.pot translation files, or unused
+      # media) by asserting the staged package contains exactly the expected
+      # files and nothing else — a safety net in case the staging step above
+      # is ever changed to copy more than intended.
+      - name: Verify package contents
+        run: |
+          cd dist
+          expected=$(cat <<'EOF' | sort
+          extension.js
+          prefs.js
+          utils.js
+          metadata.json
+          schemas/org.gnome.shell.extensions.notification-banner-re-reloaded.gschema.xml
+          schemas/gschemas.compiled
+          EOF
+          )
+          actual=$(find . -type f | sed 's|^\./||' | sort)
+
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::Package contents do not match the expected file list."
+            echo "--- expected ---"
+            echo "$expected"
+            echo "--- actual ---"
+            echo "$actual"
+            exit 1
+          fi
+
+          echo "Package contents verified: only the expected files are present."
+
+      - name: Build release zip
+        run: |
+          cd dist
+          zip -r "../${{ steps.meta.outputs.uuid }}-${{ steps.version.outputs.tag }}.zip" .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.meta.outputs.uuid }}-${{ steps.version.outputs.tag }}.zip
+          generate_release_notes: true

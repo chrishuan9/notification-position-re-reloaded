@@ -36,6 +36,23 @@ Fork of the original Gnome Shell extension allowing customization of notificatio
 * recompile schema if adding additional options: <br>
   ```glib-compile-schemas schemas```
 
+## Releasing
+
+Releases are automated via [GitHub Actions](.github/workflows/release.yml). To cut a new release:
+
+```bash
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+Pushing a `v*.*.*` tag will:
+1. Recompile `schemas/gschemas.compiled` from the `.gschema.xml` (so a forgotten local recompile never ships a stale schema).
+2. Set `metadata.json`'s integer `version` field to the tag's major number (e.g. `v12.0.0` → `12`).
+3. Package `extension.js`, `prefs.js`, `utils.js`, `metadata.json` and `schemas/` into a zip — deliberately excluding `icon.png`, `README.md`, `LICENSE`, and `.github/`, since GNOME Extensions rejects/doesn't want those in the uploaded zip.
+4. Create a GitHub Release with that zip attached and auto-generated release notes (the changelog) from the commits/PRs since the last tag.
+
+The resulting zip is what you upload to [extensions.gnome.org](https://extensions.gnome.org/upload/) — note that e.g.o assigns and displays its own review-queue version number independent of the `version` in the zip's `metadata.json`.
+
 ## Acknowledgments
 * Original Author of [notification-position-reloaded](https://github.com/marcinjakubowski/notification-position-reloaded)
 * Icon kindly provided by Flaticon: <a href="https://www.flaticon.com/free-icons/subscribe" title="subscribe icons">Subscribe icons created by Freepik - Flaticon</a>
